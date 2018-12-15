@@ -1,0 +1,188 @@
+
+////////////////////////////////////////////////////////////////////
+      //Inclusão de bibliotecas//
+////////////////////////////////////////////////////////////////////
+#include <Arduino.h>
+#include<Wire.h>
+#include <Adafruit_PWMServoDriver.h>
+#include<I2Cdev.h>
+#include"MPU6050.h"
+// #include "Plotter.h"
+
+
+////////////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////////////
+      //Definição de constantes//
+////////////////////////////////////////////////////////////////////
+#define SERVOMIN  150 // this is the 'minimum' pulse length count (out of 4096)
+#define SERVOMAX  600// this is the 'maximum' pulse length count (out of 4096)
+#define Ta 0.01/// periodo de amostragem
+
+///////////////////////////////////////////////////////////////////
+
+
+////////////////////////////////////////////////////////////////////
+      //Variáveis globais//
+////////////////////////////////////////////////////////////////////
+double Kt[2]={0.7,0.7}; // Variaveis do controle PID
+double Ti[2]={9,9};
+double Td[2]={0,0};
+double pder[2]={20,20};
+double proporcional=0,integral=0,derivativo=0,erro,erro_ant[2],sinal_controle;
+double int_ant[2]={1,1}, der_ant[2]={0,0};
+double setpoint[2]={0,0};
+double pder_p,pder_r;
+int angle_servo[2],angle_servo_ant[2];
+
+MPU6050 mpu;
+
+Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
+
+// Plotter p;
+
+double medida_acel;
+
+
+/////////////////////////////////////////////////////////////////////
+
+
+////////////////////////////////////////////////////////////////////
+      //Declaração de funções//
+////////////////////////////////////////////////////////////////////
+void setagem();
+void  controlePID(int);
+double readAccel(int);
+void printer(int);
+
+
+/////////////////////////////////////////////////////////////////////
+
+
+void setup() {
+    Serial.begin(9600);//inicializa a porta serial
+    Serial.println("Initialize MPU6050");//inicializa imu
+      while(!mpu.begin(MPU6050_SCALE_2000DPS, MPU6050_RANGE_2G))
+      {
+      Serial.println("Could not find a valid MPU6050 sensor, check wiring!");
+      delay(500);
+      }
+      // Serial.print("cacete");
+    Wire.begin();// inicializa funcoes I2C
+
+    pwm.begin();// inicializa placa conntroladora dos servos
+    pwm.setPWMFreq(60);  // Analog servos run at ~60 Hz updates
+
+
+    delay(500);
+
+    setagem();// coloca o set point no angulo de 90 graus do servo
+
+    // p.Begin();
+    // p.AddTimeGraph( "pontos", 500, "medida", medida_acel );
+}
+/////////////////////////////////////////////////////////////////////////////
+
+void loop()
+{
+
+
+  // delay(3000);
+      //a=int(readPitch()*100);
+      //p.Plot();
+      //sprintf(str, "%d       %d    ",a,millis());
+      //Serial.print(str);
+      //Serial.println("    ");
+
+      for(int i=0;i<2;i++)
+      {
+      Kt[i]=map(analogRead(A0),0,1024,10,200);
+      Ti[i]=map(analogRead(A1),0,1024,10,200);
+      Kt[i]=Kt[i]/100;
+      Ti[i]=Ti[i]/10;
+      controlePID(i);
+      sinal_controle=(sinal_controle);
+      angle_servo[i]= angle_servo_ant[i]+int(sinal_controle);
+      pwm.setPWM(i,0,(map(int(angle_servo[i]), 0,180,SERVOMIN,SERVOMAX)));
+      angle_servo_ant[i]=angle_servo[i];
+      // p.Plot();
+      printer(i);
+      delay(1000*Ta);
+      }
+}
+/////////////////////////////////////////////////////////////////////////////
+
+void printer(int i)
+{
+  Serial.print("kt ");
+  Serial.print(Kt[i]);
+  Serial.print("      ");
+  Serial.print("ti ");
+  Serial.print(Ti[i]);
+  Serial.print("      ");
+  Serial.print("medida atual= ");
+  Serial.print(medida_acel);
+  Serial.print("      ");
+  Serial.print("erro= ");
+  Serial.print(erro);
+  Serial.print("      ");
+  Serial.print("prop= ");
+  Serial.print(proporcional);
+  Serial.print("      ");
+  Serial.print("int= ");
+  Serial.print(integral);
+  Serial.print("      ");
+  Serial.print("controle= ");
+  Serial.print(sinal_controle);
+  Serial.print("      ");
+  Serial.print("setpoint= ");
+  Serial.print(setpoint[i]);
+  Serial.print("      ");
+  Serial.print("angulo= ");
+  Serial.println(angle_servo[i]);
+}
+//////////////////////////////////////////////////////////////////////////////
+
+double readAccel(int indice)
+{
+  Vector normAccel = mpu.readNormalizeAccel();
+  double medida;
+  switch(indice)
+  {
+    case 0:
+    medida = -(atan2(normAccel.XAxis, sqrt(normAccel.YAxis*normAccel.YAxis + normAccel.ZAxis*normAccel.ZAxis))*180.0)/M_PI;
+    break;
+    case 1:
+    medida= (atan2(normAccel.YAxis, normAccel.ZAxis)*180.0)/M_PI;
+    break;
+  }
+  return medida;
+}
+//////////////////////////////////////////////////////////////////////////////
+
+void setagem(){
+  for(int i=0;i<2;i++)
+  {
+    pwm.setPWM(i,0,(map(90, 0,180,SERVOMIN,SERVOMAX)));
+    delay(3000);
+    setpoint[i]=readAccel(i)+90;
+    angle_servo_ant[i]=90;
+  }
+}
+/////////////////////////////////////////////////////////////////////////////
+
+void controlePID( int i)
+{
+  medida_acel=readAccel(i)+90;
+  erro=setpoint[i]-medida_acel;
+  proporcional=Kt[i]*erro;
+  if(Ti[i]!=0)
+  {
+    integral=int_ant[i]+Kt[i]*Ta*(erro-erro_ant[i])/(2*Ti[i]);
+  }
+  derivativo= (der_ant[i])*(2-(pder_p)*Ta)/(2+(pder_p)*Ta)  +((2*(Kt[i]))*((pder_p)))*((Td[i]))/(2+(pder_p)*Ta)*(erro-(erro_ant[i]));
+  sinal_controle=-(proporcional+integral+derivativo);
+  erro_ant[i]=erro;
+  int_ant[i]=integral;
+  der_ant[i]=derivativo;
+}
