@@ -1,0 +1,225 @@
+
+////////////////////////////////////////////////////////////////////
+      //Inclusão de bibliotecas//
+////////////////////////////////////////////////////////////////////
+#include <Arduino.h>
+#include<Wire.h>
+#include <Adafruit_PWMServoDriver.h>
+#include<I2Cdev.h>
+#include"MPU6050.h"
+#include <Kalman.h>
+// #include "Plotter.h"
+
+
+////////////////////////////////////////////////////////////////////
+
+
+
+////////////////////////////////////////////////////////////////////
+      //Definição de constantes//
+////////////////////////////////////////////////////////////////////
+#define SERVOMIN  150 // this is the 'minimum' pulse length count (out of 4096)
+#define SERVOMAX  600// this is the 'maximum' pulse length count (out of 4096)
+
+
+
+///////////////////////////////////////////////////////////////////
+
+
+////////////////////////////////////////////////////////////////////
+      //Variáveis globais//
+////////////////////////////////////////////////////////////////////
+double Kt[2]={0.2,0.2}; // Variaveis do controle PID
+double Ti[2]={0.01,0.01};
+double Td[2]={0,0};
+double pder[2]={20,20};
+double proporcional=0,integral=0,derivativo=0,erro,erro_ant[2];
+double int_ant[2]={1,1}, der_ant[2]={0,0};
+ double setpoint[2]={0,0};
+double pder_p,pder_r;
+ int angle_servo[2],angle_servo_ant[2];
+
+MPU6050 mpu;
+Vector normAccel;
+Vector normGyro;
+
+
+Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
+Kalman Kalman[2];
+
+
+// Plotter p;
+
+double medida_acel[2];
+double medida_gyro;
+
+double KalAngle[2];
+double gyroAngle[2];
+double compAngle[2];
+double gyroRate[2];
+
+double angulo;
+
+uint32_t timer;
+double dt;
+
+
+/////////////////////////////////////////////////////////////////////
+
+
+////////////////////////////////////////////////////////////////////
+      //Declaração de funções//
+////////////////////////////////////////////////////////////////////
+void setagem();
+double  controlePID(int , double);
+double readAccel(int);
+double readGyro(int);
+
+
+/////////////////////////////////////////////////////////////////////
+
+
+void setup() {
+    Serial.begin(9600);//inicializa a porta serial
+     Serial.println("Inicializando sensor inercial");//inicializa imu
+      while(!mpu.begin(MPU6050_SCALE_2000DPS, MPU6050_RANGE_2G))
+      {
+       Serial.println("Could not find a valid MPU6050 sensor, check wiring!");
+      delay(500);
+      }
+    Wire.begin();// inicializa funcoes I2C
+    Serial.println("I2C inicializado");
+
+    pwm.begin();// inicializa placa conntroladora dos servos
+    pwm.setPWMFreq(60);  // Analog servos run at ~60 Hz updates
+    Serial.println("Driver de servos inicializado");
+
+
+    delay(500);
+    Serial.println("Iniciando calibração...não se mova!");
+    setagem();// Realiza a calibração
+    Serial.println("Calibração concluída!");
+    }
+
+
+/////////////////////////////////////////////////////////////////////////////
+
+void loop()
+{
+      for(int i=0;i<2;i++)
+      {
+        medida_acel[i]=readAccel(i);
+        gyroRate[i]=readGyro(i)/131;
+        dt=(double)(micros()-timer)/1000000;
+        timer=micros();
+
+        //  KalAngle[i] = Kalman[i].getAngle(medida_acel[i], gyroRate[i], dt);
+        // angle_servo[i]=angle_servo_ant[i]+(int)controlePID(i,KalAngle[i]+90);
+        // angle_servo_ant[i]=angle_servo[i];
+      }
+      for(int i=0;i<2;i++)
+      {
+        compAngle[i] = 0.9 * (compAngle[i] + gyroRate[i+1] * dt) + 0.1 * medida_acel[i];
+        angle_servo[i]=angle_servo_ant[i]+(int)controlePID(i,compAngle[i]+90);
+        angle_servo_ant[i]=angle_servo[i];
+      }
+
+      for(int i=0;i<2;i++)
+      {
+        if((angle_servo[i]<180) && (angle_servo[i]>0))
+        pwm.setPWM(i,0,(map(int(angle_servo[i]), 0,180,SERVOMIN,SERVOMAX)));
+      }
+
+
+      Serial.print(compAngle[0]);
+      Serial.print("     ");
+      Serial.print(angle_servo_ant[0]);
+      Serial.print("     ");
+      Serial.print(angle_servo[0]);
+      Serial.println("     ");
+
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+double readAccel(int indice)
+{
+  normAccel = mpu.readNormalizeAccel();
+  double medida;
+  switch(indice)
+  {
+    case 0:
+    medida = -(atan2(normAccel.XAxis, sqrt(normAccel.YAxis*normAccel.YAxis + normAccel.ZAxis*normAccel.ZAxis))*180.0)/M_PI;
+    break;
+    case 1:
+    medida= (atan2(normAccel.YAxis, normAccel.ZAxis)*180.0)/M_PI;
+    // medida= (atan2(normAccel.YAxis,sqrt(normAccel.XAxis*normAccel.XAxis + normAccel.ZAxis*normAccel.ZAxis))*180.0)/M_PI;
+    break;
+  }
+  return medida;
+}
+//////////////////////////////////////////////////////////////////////////////
+
+double readGyro(int indice)
+{
+  normGyro = mpu.readNormalizeGyro();
+  double medida;
+  switch(indice)
+  {
+    case 0:
+    medida = normGyro.XAxis;
+    break;
+    case 1:
+    medida= normGyro.YAxis;
+    break;
+    case 2:
+    medida= normGyro.ZAxis;
+    break;
+  }
+  return medida;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////
+
+void setagem(){
+  pwm.setPWM(0,0,(map(90, 0,180,SERVOMIN,SERVOMAX)));
+  delay(100);
+  pwm.setPWM(1,0,(map(90, 0,180,SERVOMIN,SERVOMAX)));
+  delay(100);
+
+  for(int i=0;i<2;i++)
+  {
+    pwm.setPWM(i,0,(map(90, 0,180,SERVOMIN,SERVOMAX)));
+    delay(2000);
+
+    setpoint[i]=readAccel(i)+90;
+    angle_servo_ant[i]=setpoint[i];
+    Kalman[i].setAngle(setpoint[i]-90);
+    gyroAngle[i]=setpoint[i]-90;
+    compAngle[i]=setpoint[i]-90;
+  }
+  delay(2000);
+  mpu.calibrateGyro();
+  delay(500);
+
+  timer=micros();
+}
+/////////////////////////////////////////////////////////////////////////////
+
+double controlePID( int i, double angulo)
+{
+  double medida=angulo;
+  double result;
+  erro=setpoint[i]-medida;
+  proporcional=Kt[i]*erro;
+  if(Ti[i]!=0)
+  {
+    integral=int_ant[i]+Kt[i]*dt*(erro-erro_ant[i])/(2*Ti[i]);
+  }
+  derivativo= (der_ant[i])*(2-(pder_p)*dt)/(2+(pder_p)*dt)  +((2*(Kt[i]))*((pder_p)))*((Td[i]))/(2+(pder_p)*dt)*(erro-(erro_ant[i]));
+  result=-(proporcional+integral+derivativo);
+  erro_ant[i]=erro;
+  int_ant[i]=integral;
+  der_ant[i]=derivativo;
+  return result;
+}
